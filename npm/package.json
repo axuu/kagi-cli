@@ -20,7 +20,8 @@
     "README.md"
   ],
   "scripts": {
-    "postinstall": "node lib/install.cjs"
+    "postinstall": "node lib/install.cjs",
+    "test": "node --test test/install.test.cjs"
   },
   "publishConfig": {
     "access": "public",

@@ -50,9 +50,12 @@ If any command fails, fix it before tagging.
 2. Create and push the release tag, for example:
 
 ```bash
-git tag vX.Y.Z
+git tag -s vX.Y.Z
+git verify-tag vX.Y.Z
 git push origin vX.Y.Z
 ```
+
+The signing key must be registered with GitHub; the release workflow rejects tags GitHub cannot verify.
 
 ## What the tag triggers
 
@@ -189,7 +192,7 @@ There is no crates.io publish step. `cargo install` currently pulls from GitHub,
 
 ### Rebuild an existing tag
 
-If a release needs to be rebuilt for an existing tag:
+Only tags with a GitHub-verified signature can be rebuilt; unsigned historical tags cannot be rebuilt by the workflow. To rebuild an eligible release:
 
 1. Run the `Release` workflow manually.
 2. Pass `release_tag` with the existing tag, for example `v0.3.1`.

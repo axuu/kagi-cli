@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const https = require("node:https");
@@ -102,6 +103,30 @@ function download(url, destination) {
   });
 }
 
+async function verifyChecksum(filePath, checksumsPath, assetFileName) {
+  const checksums = await fsp.readFile(checksumsPath, "utf8");
+  const entry = checksums
+    .split(/\r?\n/)
+    .find(
+      (line) =>
+        /^[a-f0-9]{64}  /i.test(line) && line.slice(66) === assetFileName
+    );
+
+  if (!entry) {
+    throw new Error(`checksum not found for ${assetFileName}`);
+  }
+
+  const expected = entry.slice(0, 64).toLowerCase();
+  const actual = crypto
+    .createHash("sha256")
+    .update(await fsp.readFile(filePath))
+    .digest("hex");
+
+  if (actual !== expected) {
+    throw new Error(`SHA-256 checksum mismatch for ${assetFileName}`);
+  }
+}
+
 async function ensureInstalled({ quiet }) {
   const binaryPath = getBinaryPath();
 
@@ -111,21 +136,33 @@ async function ensureInstalled({ quiet }) {
   } catch {
     const vendorDir = path.dirname(binaryPath);
     const tempPath = `${binaryPath}.tmp`;
+    const checksumsPath = `${tempPath}.checksums`;
+    const assetFileName = getAssetFileName();
     const assetUrl = getAssetUrl();
+    const checksumsUrl = `https://github.com/${repo}/releases/download/${releaseTag}/kagi-${releaseTag}-checksums.txt`;
 
     if (!quiet) {
       console.error(`Downloading native kagi binary from ${assetUrl}`);
     }
 
     await fsp.mkdir(vendorDir, { recursive: true });
-    await download(assetUrl, tempPath);
-    await fsp.rename(tempPath, binaryPath);
+    try {
+      await download(assetUrl, tempPath);
+      await download(checksumsUrl, checksumsPath);
+      await verifyChecksum(tempPath, checksumsPath, assetFileName);
 
-    if (process.platform !== "win32") {
-      await fsp.chmod(binaryPath, 0o755);
+      if (process.platform !== "win32") {
+        await fsp.chmod(tempPath, 0o755);
+      }
+
+      await fsp.rename(tempPath, binaryPath);
+      return binaryPath;
+    } finally {
+      await Promise.all([
+        fsp.rm(tempPath, { force: true }),
+        fsp.rm(checksumsPath, { force: true }),
+      ]);
     }
-
-    return binaryPath;
   }
 }
 
@@ -142,4 +179,5 @@ module.exports = {
   getAssetFileName,
   getAssetUrl,
   getBinaryPath,
+  verifyChecksum,
 };

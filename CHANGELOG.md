@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fixed
+
+- Reject non-relative Kagi settings edit links before sending the session cookie.
+- Verify installer downloads against release SHA-256 checksums and keep Unix search history private.
+- Require verified signed tags, pinned Actions, and job-scoped write access for releases.
+
 ## [0.18.1]
 
 ### Fixed

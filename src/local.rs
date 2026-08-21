@@ -132,12 +132,23 @@ pub fn append_history(entry: &HistoryEntry) -> Result<(), KagiError> {
     ensure_parent_dir(&path)?;
     let mut raw = serde_json::to_string(entry)?;
     raw.push('\n');
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
         .open(&path)
         .and_then(|mut file| {
             use std::io::Write;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            }
             file.write_all(raw.as_bytes())
         })
         .map_err(|error| {
@@ -286,6 +297,32 @@ mod tests {
         let value = cache_get("abc").expect("cache get").expect("cached value");
 
         assert_eq!(value["ok"], true);
+        unsafe { env::remove_var(CACHE_DIR_ENV) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = lock_env();
+        let tempdir = TempDir::new().expect("tempdir");
+        unsafe { env::set_var(CACHE_DIR_ENV, tempdir.path()) };
+
+        append_history(&HistoryEntry {
+            timestamp: 1,
+            command: "search".to_string(),
+            query: Some("private query".to_string()),
+            result_count: Some(1),
+        })
+        .expect("append history");
+
+        let mode = fs::metadata(tempdir.path().join("history.jsonl"))
+            .expect("history metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
         unsafe { env::remove_var(CACHE_DIR_ENV) };
     }
 

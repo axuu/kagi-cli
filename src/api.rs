@@ -1248,7 +1248,7 @@ pub async fn execute_lens_get(target: &str, token: &str) -> Result<LensDetails, 
     let lenses = execute_lens_list(token).await?;
     let lens = resolve_lens_ref(&lenses, target)?;
     let html =
-        fetch_authenticated_html(&absolute_kagi_url(&lens.edit_url), token, "lens form").await?;
+        fetch_authenticated_html(&absolute_kagi_url(&lens.edit_url)?, token, "lens form").await?;
     parse_lens_form(&html)
 }
 
@@ -1456,7 +1456,7 @@ pub async fn execute_custom_bang_get(
     let bangs = execute_custom_bang_list(token).await?;
     let bang = resolve_custom_bang_ref(&bangs, target)?;
     let html = fetch_authenticated_html(
-        &absolute_kagi_url(&bang.edit_url),
+        &absolute_kagi_url(&bang.edit_url)?,
         token,
         "custom bang form",
     )
@@ -1602,7 +1602,7 @@ pub async fn execute_redirect_get(
     let redirects = execute_redirect_list(token).await?;
     let redirect = resolve_redirect_ref(&redirects, target)?;
     let html = fetch_authenticated_html(
-        &absolute_kagi_url(&redirect.edit_url),
+        &absolute_kagi_url(&redirect.edit_url)?,
         token,
         "redirect form",
     )
@@ -2950,12 +2950,14 @@ fn normalize_optional_form_value(value: Option<String>) -> Option<String> {
     })
 }
 
-fn absolute_kagi_url(path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else {
-        http::kagi_url(path)
+fn absolute_kagi_url(path: &str) -> Result<String, KagiError> {
+    if !path.starts_with('/') || path.starts_with("//") || path.contains('\\') {
+        return Err(KagiError::Parse(
+            "unsafe settings edit URL: expected a root-relative Kagi path".to_string(),
+        ));
     }
+
+    Ok(http::kagi_url(path))
 }
 
 fn url_query_value(url: &Url, key: &str) -> Option<String> {
@@ -5840,7 +5842,7 @@ mod tests {
         execute_custom_assistant_get, execute_custom_assistant_list,
         execute_custom_assistant_update, execute_custom_bang_create, execute_custom_bang_delete,
         execute_custom_bang_get, execute_custom_bang_update, execute_lens_create,
-        execute_lens_delete, execute_lens_set_enabled, execute_lens_update,
+        execute_lens_delete, execute_lens_get, execute_lens_set_enabled, execute_lens_update,
         execute_redirect_create, execute_redirect_delete, execute_redirect_list,
         execute_redirect_set_enabled, execute_redirect_update,
     };
@@ -7732,6 +7734,53 @@ mod tests {
     fn does_not_retry_lens_mutation_lookup_for_auth_errors() {
         let error = KagiError::Auth("invalid or expired Kagi session token".to_string());
         assert!(!should_retry_lens_mutation_lookup(&error));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn rejects_absolute_settings_edit_urls_before_sending_session_cookie() {
+        use httpmock::Method::GET;
+        use httpmock::MockServer;
+
+        let kagi = MockServer::start();
+        let attacker = MockServer::start();
+        let _settings = kagi.mock(|when, then| {
+            when.method(GET)
+                .path("/html/settings/lenses")
+                .header("cookie", "kagi_session=test-session");
+            then.status(200)
+                .header("content-type", "text/html")
+                .body(format!(
+                    r#"
+                <form class="__lens_item">
+                  <input type="hidden" name="lens_id" value="22524">
+                  <input type="hidden" name="active_index" value="0">
+                  <div class="lens_title"><div>Reddit</div></div>
+                  <div class="lens_edit_lens">
+                    <a aria-label="Edit lens" href="{}/steal">Edit</a>
+                  </div>
+                </form>
+                "#,
+                    attacker.base_url()
+                ));
+        });
+        let exfiltration = attacker.mock(|when, then| {
+            when.method(GET)
+                .path("/steal")
+                .header("cookie", "kagi_session=test-session");
+            then.status(200)
+                .header("content-type", "text/html")
+                .body(r#"<form><input name="name" value="stolen"></form>"#);
+        });
+
+        let _env_guard = lock_env();
+        let _base_url_env = set_env_var("KAGI_BASE_URL", &kagi.base_url());
+        let error = execute_lens_get("22524", "test-session")
+            .await
+            .expect_err("absolute edit URL should be rejected");
+
+        assert!(error.to_string().contains("unsafe settings edit URL"));
+        exfiltration.assert_calls(0);
     }
 
     #[test]

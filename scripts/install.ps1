@@ -32,7 +32,8 @@ if (-not $Version) {
 
 $Target = Get-Target
 $Archive = "$AppName-$Version-$Target.zip"
-$Url = "https://github.com/$Repo/releases/download/$Version/$Archive"
+$ChecksumFile = "$AppName-$Version-checksums.txt"
+$ReleaseUrl = "https://github.com/$Repo/releases/download/$Version"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("kagi-install-" + [System.Guid]::NewGuid().ToString("N"))
 $InstallPath = Join-Path $BinDir "$AppName.exe"
 $InstallTemp = Join-Path $BinDir ("$AppName." + [System.Guid]::NewGuid().ToString("N") + ".tmp")
@@ -42,8 +43,22 @@ New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
 try {
     $ArchivePath = Join-Path $TempDir $Archive
+    $ChecksumPath = Join-Path $TempDir $ChecksumFile
     Write-Host "Downloading $Archive"
-    Invoke-WebRequest -Uri $Url -OutFile $ArchivePath
+    Invoke-WebRequest -Uri "$ReleaseUrl/$Archive" -OutFile $ArchivePath
+    Invoke-WebRequest -Uri "$ReleaseUrl/$ChecksumFile" -OutFile $ChecksumPath
+
+    $ChecksumPattern = "^([0-9a-fA-F]{64})  $([regex]::Escape($Archive))$"
+    $ChecksumLine = Get-Content $ChecksumPath | Where-Object { $_ -match $ChecksumPattern } | Select-Object -First 1
+    if (-not $ChecksumLine) {
+        throw "Checksum not found for $Archive"
+    }
+
+    $ExpectedHash = ([regex]::Match($ChecksumLine, $ChecksumPattern)).Groups[1].Value
+    $ActualHash = (Get-FileHash -Algorithm SHA256 $ArchivePath).Hash
+    if ($ActualHash -ne $ExpectedHash) {
+        throw "SHA-256 checksum mismatch for $Archive"
+    }
 
     Expand-Archive -Path $ArchivePath -DestinationPath $TempDir -Force
     Copy-Item (Join-Path $TempDir "$AppName.exe") $InstallTemp

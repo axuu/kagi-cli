@@ -59,7 +59,8 @@ if [ -z "$version" ]; then
 fi
 
 archive="${APP_NAME}-${version}-${target}.tar.gz"
-url="https://github.com/${REPO}/releases/download/${version}/${archive}"
+checksum_file="${APP_NAME}-${version}-checksums.txt"
+release_url="https://github.com/${REPO}/releases/download/${version}"
 
 tmpdir="$(mktemp -d)"
 install_tmp=""
@@ -72,7 +73,27 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Downloading $archive"
-curl -fL "$url" -o "$tmpdir/$archive"
+curl -fL "$release_url/$archive" -o "$tmpdir/$archive"
+curl -fL "$release_url/$checksum_file" -o "$tmpdir/$checksum_file"
+
+expected="$(awk -v asset="$archive" '$2 == asset && length($1) == 64 && $1 !~ /[^[:xdigit:]]/ { print tolower($1); exit }' "$tmpdir/$checksum_file")"
+if [ -z "$expected" ]; then
+  echo "error: checksum not found for $archive" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "$tmpdir/$archive")"
+else
+  need_cmd shasum
+  actual="$(shasum -a 256 "$tmpdir/$archive")"
+fi
+actual="${actual%% *}"
+
+if [ "$actual" != "$expected" ]; then
+  echo "error: SHA-256 checksum mismatch for $archive" >&2
+  exit 1
+fi
 
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 mkdir -p "$BINDIR"
